@@ -71,7 +71,7 @@ def chunk_text(full_text, tokenizer, max_chunk_tokens = 400, overlap_tokens = 50
 
 
 def summarize_document(file_path, tokenizer, model, output_folder = './summaries'):
-    # aqui implementamos MapReduce.
+    # aqui implementamos MapReduce
 
     full_text = read_text_file(file_path)
     if not full_text:
@@ -83,7 +83,9 @@ def summarize_document(file_path, tokenizer, model, output_folder = './summaries
     print("\n(Etapa 'Map')")
     chunk_summaries = []
     for i, chunk in enumerate(text_chunks):
-        print(f"   chunk {i + 1}/{len(text_chunks)}")
+
+        if (i + 1) % 15 == 0:
+            print(f"   chunk {i + 1}/{len(text_chunks)}")
         
         # preparamos o input para o modelo
         inputs = tokenizer.encode("summarize: " + chunk, return_tensors="pt", max_length=512, truncation=True)
