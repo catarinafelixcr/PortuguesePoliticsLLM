@@ -58,7 +58,7 @@ api_key = carregar_api_key()
 if api_key:
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
     except Exception as e:
         print(f"erro: chave inválida. erro: {e}")
         exit()
@@ -138,7 +138,65 @@ def criar_perfil_partido(partido, dados_eleitorais):
     except Exception as e:
         return f"Ocorreu um erro ao criar o perfil: {e}"
 
+# <<< SUBSTITUA A FUNÇÃO ANTIGA POR ESTA NOVA VERSÃO >>>
 
+def formatar_e_apresentar_tema(texto_tema):
+    """
+    Recebe um bloco de texto com propostas e formata-o
+    de forma clara e legível. Assume que cada proposta está numa só linha.
+    """
+    linhas = texto_tema.split('\n')
+    output_formatado = []
+    
+    for linha in linhas:
+        linha_limpa = linha.strip()
+        
+        if not linha_limpa:
+            continue # Ignora linhas em branco
+        
+        # Se a linha começa com '•', é uma proposta.
+        if linha_limpa.startswith('•'):
+            proposta = linha_limpa[1:].strip()
+            output_formatado.append(f"  - {proposta}")
+        # Se não, é um título de partido ou o título geral.
+        else:
+            # Adiciona uma linha em branco antes de um novo título para espaçamento
+            if output_formatado and not output_formatado[-1].strip() == "":
+                 output_formatado.append("") 
+            
+            output_formatado.append(f"--- {linha_limpa} ---")
+
+    # Junta todas as linhas formatadas numa única string de texto
+    return "\n".join(output_formatado)
+
+def formatar_tema_com_llm(tema, texto_bruto_tema):
+
+    prompt = f"""
+    Age como um editor de texto extremamente organizado. A tua tarefa é pegar no seguinte texto bruto sobre o tema '{tema}'
+    e formatá-lo numa lista clara, limpa e fácil de ler.
+
+    Siga estas regras estritamente:
+    1.  O nome de cada partido deve ser um título principal. Formata-o assim: 'NOME DO PARTIDO - - - - - - -- - - - - - - - --\n'.
+    2.  Cada proposta individual de um partido deve começar com um traço e um espaço, como numa lista. Exemplo: '  - Aumentar o investimento.'
+    3.  **Importante:** Se uma proposta estiver dividida em várias linhas no texto original, junta-as numa única linha.
+    4.  Remove todo o "lixo visual", como linhas em branco desnecessárias ou símbolos de '•'. Não adiciones comentários teus.
+    5.  Mantém a linguagem original das propostas.
+
+    Aqui está o texto bruto:
+    --- INÍCIO DO TEXTO BRUTO ---
+    {texto_bruto_tema}
+    --- FIM DO TEXTO BRUTO ---
+
+    Apresenta apenas o resultado final formatado.
+    """
+
+    try:
+        response = model.generate_content(prompt)
+        
+        return response.text
+    except Exception as e:
+        return f"Ocorreu um erro ao formatar com a IA: {e}"
+    
 def main():
     print("Bem-vindo ao Assistente LLM de Política Portuguesa!")
     print("Este assistente permite explorar os programas eleitorais de 2025 dos principais partidos portugueses.")
@@ -179,10 +237,12 @@ def main():
         elif escolha == '2':
             temas_disponiveis = ", ".join(dados["temas"].keys())
             tema_escolhido = input(f"Insira o tema ({temas_disponiveis}): ").lower()
-            resultado = apresentar_info_por_tema(tema_escolhido, dados)
+            
+            texto_bruto = apresentar_info_por_tema(tema_escolhido, dados)
+            resultado_formatado = formatar_tema_com_llm(tema_escolhido, texto_bruto)
             print()
             print("*" * 30, f"Propostas sobre {tema_escolhido.capitalize()}", "*" * 30)
-            print(resultado)
+            print(resultado_formatado)
             print("-" * 30)
 
         elif escolha == '0':
