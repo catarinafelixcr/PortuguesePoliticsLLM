@@ -1,4 +1,6 @@
 import os
+import numpy as np
+from sentence_transformers import SentenceTransformer
 import google.generativeai as genai
 
 # os partidos podem ser mencionados de várias formas, por isso vamos criar um dicionário
@@ -58,7 +60,7 @@ api_key = carregar_api_key()
 if api_key:
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
     except Exception as e:
         print(f"erro: chave inválida. erro: {e}")
         exit()
@@ -67,6 +69,40 @@ else:
     exit()
 
 # --------------------------------------------------------------------------
+
+embedding_model = SentenceTransformer('multi-qa-mpnet-base-dot-v1')
+
+def criar_base_de_dados_vetorial(dados_partidos):
+    print("A criar a BD vetorial (pode demorar)...")
+    base_de_dados = []
+    for sigla, texto_completo in dados_partidos.items():
+        # dividir o programa em parágrafos (chunks)
+        paragrafos = texto_completo.split('\n\n')
+        for paragrafo in paragrafos:
+            paragrafo_limpo = paragrafo.strip()
+            if len(paragrafo_limpo) > 50:
+                # converter o parágrafo num vetor numérico (embedding)
+                embedding = embedding_model.encode(paragrafo_limpo)
+                base_de_dados.append({"sigla_partido": sigla, "chunk_texto": paragrafo_limpo, "embedding": embedding})
+    print(f"Base de dados criada com {len(base_de_dados)} parágrafos vetorizados.")
+    return base_de_dados
+
+def encontrar_chunks_relevantes(query_utilizador, db_vetorial, top_k=5):
+
+    query_embedding = embedding_model.encode(query_utilizador)
+    
+    # calculamos a similaridade entre a pergunta e todos os chunks
+    similaridades = []
+    for item in db_vetorial:
+        # usamos o produto escalar (dot product) para medir a similaridade
+        sim = np.dot(query_embedding, item["embedding"])
+        similaridades.append(sim)
+    
+    # obter os índices dos 'top_k' chunks mais similares
+    indices_top = np.argsort(similaridades)[::-1][:top_k]
+    
+    # devolver os chunks correspondentes
+    return [db_vetorial[i] for i in indices_top]
 
 def carregar_dados_processados(pasta_dados):
     print("A carregar os dados dos programas eleitorais!!")
@@ -94,7 +130,6 @@ def carregar_dados_processados(pasta_dados):
 
 
 def encontrar_partido(input_utilizador, info_partidos):
-
     input_normalizado = input_utilizador.lower().strip()
 
     for sigla, info in info_partidos.items():
@@ -138,13 +173,9 @@ def criar_perfil_partido(partido, dados_eleitorais):
     except Exception as e:
         return f"Ocorreu um erro ao criar o perfil: {e}"
 
-# <<< SUBSTITUA A FUNÇÃO ANTIGA POR ESTA NOVA VERSÃO >>>
 
 def formatar_e_apresentar_tema(texto_tema):
-    """
-    Recebe um bloco de texto com propostas e formata-o
-    de forma clara e legível. Assume que cada proposta está numa só linha.
-    """
+
     linhas = texto_tema.split('\n')
     output_formatado = []
     
@@ -152,15 +183,12 @@ def formatar_e_apresentar_tema(texto_tema):
         linha_limpa = linha.strip()
         
         if not linha_limpa:
-            continue # Ignora linhas em branco
+            continue 
         
-        # Se a linha começa com '•', é uma proposta.
         if linha_limpa.startswith('•'):
             proposta = linha_limpa[1:].strip()
             output_formatado.append(f"  - {proposta}")
-        # Se não, é um título de partido ou o título geral.
         else:
-            # Adiciona uma linha em branco antes de um novo título para espaçamento
             if output_formatado and not output_formatado[-1].strip() == "":
                  output_formatado.append("") 
             
@@ -196,18 +224,61 @@ def formatar_tema_com_llm(tema, texto_bruto_tema):
         return response.text
     except Exception as e:
         return f"Ocorreu um erro ao formatar com a IA: {e}"
+
+
+def gerar_resposta_personalizada(query, dados_eleitorais, db_vetorial):
+    """
+    Função principal do RAG: encontra chunks e gera uma resposta contextualizada.
+    """
+    # 1. Recuperar (Retrieve) os chunks relevantes
+    chunks_relevantes = encontrar_chunks_relevantes(query, db_vetorial, top_k=3)
+    
+    # 2. Construir o Contexto e o Prompt
+    contexto = ""
+    for chunk in chunks_relevantes:
+        partido = PARTIDOS_INFO[chunk['sigla_partido']]['nome_completo']
+        contexto += f"--- Trecho Relevante de {partido} ---\n"
+        contexto += f"{chunk['chunk_texto']}\n\n"
+
+    prompt_final = f"""
+    Age como um assistente de política portuguesa, imparcial e baseado em factos.
+    A pergunta do utilizador é: "{query}"
+
+    Usa os seguintes trechos dos programas eleitorais para construir a tua resposta.
+    A tua tarefa é analisar estes trechos e responder diretamente à pergunta.
+    -   Identifica claramente quais os partidos que se alinham com a ideia do utilizador.
+    -   Se houver posições contrárias ou alternativas nos trechos, menciona-as também.
+    -   Se um partido relevante não for mencionado nos trechos, podes dizer que a informação não foi encontrada no contexto fornecido.
+    -   Mantém a resposta concisa e focada na pergunta.
+
+    --- CONTEXTO FORNECIDO ---
+    {contexto}
+    --- FIM DO CONTEXTO ---
+
+    Com base estritamente no contexto acima, responde à pergunta do utilizador.
+    """
+    
+    # 3. Gerar (Generate) a resposta com o LLM
+    print("A gerar resposta personalizada com base nos dados encontrados...")
+    try:
+        response = model.generate_content(prompt_final)
+        return response.text
+    except Exception as e:
+        return f"Ocorreu um erro ao gerar a resposta: {e}"
     
 def main():
     print("Bem-vindo ao Assistente LLM de Política Portuguesa!")
     print("Este assistente permite explorar os programas eleitorais de 2025 dos principais partidos portugueses.")
     print("Pode pedir resumos, explorar propostas por tema e obter perfis básicos dos partidos.\n")
     dados = carregar_dados_processados('processed_data')
-    
+    db_vetorial = criar_base_de_dados_vetorial(dados["partidos"])
+
     while True:
         print("\n", "* " * 30, "MENU PRINCIPAL", "* " * 30)
         print("1. Resumo do Programa de um Partido")
         print("2. Ver Propostas por Tema")
         print("3. Perfil Básico de um Partido")
+        print("4. Pergunta Aberta / Análise de Posições (Matching)")
         print("0. Sair do Programa")
         
         escolha = input("\nEscolha uma opção: ")
@@ -248,6 +319,16 @@ def main():
         elif escolha == '0':
             print("Obrigado por usar o assistente. Até à próxima!")
             break
+
+        elif escolha == '4':
+            query = input("\nDescreva a sua posição ou faça a sua pergunta (ex: 'defendo o aumento do salário mínimo'):\n> ")
+            if query:
+                resultado = gerar_resposta_personalizada(query, dados, db_vetorial)
+                print("\n--- Análise de Posições ---")
+                print(resultado)
+                print("-------------------------")
+            else:
+                print("Pergunta vazia. Tente novamente.")
             
         else:
             print("Opção inválida. Por favor, tente novamente.")
