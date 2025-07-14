@@ -2,6 +2,7 @@ import os
 import numpy as np
 from sentence_transformers import SentenceTransformer
 import google.generativeai as genai
+import pickle 
 
 # os partidos podem ser mencionados de várias formas, por isso vamos criar um dicionário
 # com as siglas oficiais e os nomes completos, além de aliases comuns.
@@ -73,18 +74,36 @@ else:
 embedding_model = SentenceTransformer('multi-qa-mpnet-base-dot-v1')
 
 def criar_base_de_dados_vetorial(dados_partidos):
-    print("A criar a BD vetorial (pode demorar)...")
+    print("A criar a base de dados vetorial (pode demorar)...")
     base_de_dados = []
+    
+    print("  -> A carregar o modelo de embeddings (isto pode demorar um pouco na primeira vez)...")
+    embedding_model = SentenceTransformer('multi-qa-mpnet-base-dot-v1')
+    
     for sigla, texto_completo in dados_partidos.items():
-        # dividir o programa em parágrafos (chunks)
-        paragrafos = texto_completo.split('\n\n')
-        for paragrafo in paragrafos:
-            paragrafo_limpo = paragrafo.strip()
-            if len(paragrafo_limpo) > 50:
-                # converter o parágrafo num vetor numérico (embedding)
-                embedding = embedding_model.encode(paragrafo_limpo)
-                base_de_dados.append({"sigla_partido": sigla, "chunk_texto": paragrafo_limpo, "embedding": embedding})
-    print(f"Base de dados criada com {len(base_de_dados)} parágrafos vetorizados.")
+        linhas = texto_completo.split('\n')
+        
+        # juntamos linhas para formar parágrafos mais coerentes
+        paragrafo_atual = ""
+        for linha in linhas:
+            linha_limpa = linha.strip()
+            
+            # se a linha estiver em branco, significa que um parágrafo acabou.
+            if not linha_limpa:
+                if len(paragrafo_atual) > 100: # processamos o parágrafo se for suficientemente longo
+                    embedding = embedding_model.encode(paragrafo_atual)
+                    base_de_dados.append({"sigla_partido": sigla, "chunk_texto": paragrafo_atual, "embedding": embedding})
+            
+                paragrafo_atual = "" # reset para o próximo parágrafo
+            else:
+                paragrafo_atual += " " + linha_limpa # continuamos a construir o parágrafo
+
+        # último parágrafo do ficheiro
+        if len(paragrafo_atual) > 100:
+            embedding = embedding_model.encode(paragrafo_atual)
+            base_de_dados.append({"sigla_partido": sigla, "chunk_texto": paragrafo_atual, "embedding": embedding})
+
+    print(f"Base de dados criada com sucesso! Foram vetorizados {len(base_de_dados)} parágrafos.")
     return base_de_dados
 
 def encontrar_chunks_relevantes(query_utilizador, db_vetorial, top_k=5):
@@ -271,10 +290,28 @@ def main():
     print("Este assistente permite explorar os programas eleitorais de 2025 dos principais partidos portugueses.")
     print("Pode pedir resumos, explorar propostas por tema e obter perfis básicos dos partidos.\n")
     dados = carregar_dados_processados('processed_data')
-    db_vetorial = criar_base_de_dados_vetorial(dados["partidos"])
+    #db_vetorial = criar_base_de_dados_vetorial(dados["partidos"])
+
+    # vamos guardar a bd
+    nome_ficheiro_db = "vetor_db.pkl"
+    if os.path.exists(nome_ficheiro_db):
+        print(f"A carregar base de dados vetorial guardada de '{nome_ficheiro_db}'...")
+        with open(nome_ficheiro_db, 'rb') as f:
+            db_vetorial = pickle.load(f)
+        print(f"Base de dados carregada com {len(db_vetorial)} parágrafos.")
+    else:
+        print(f"Ficheiro da base de dados ('{nome_ficheiro_db}') não encontrado.")
+        db_vetorial = criar_base_de_dados_vetorial(dados["partidos"])
+        
+        print(f"A guardar a nova base de dados em '{nome_ficheiro_db}' para uso futuro...")
+        with open(nome_ficheiro_db, 'wb') as f:
+            pickle.dump(db_vetorial, f)
+        print("Base de dados guardada com sucesso.")
+
+    embedding_model = SentenceTransformer('multi-qa-mpnet-base-dot-v1')
 
     while True:
-        print("\n", "* " * 30, "MENU PRINCIPAL", "* " * 30)
+        print("\n", "* " * 15, "MENU PRINCIPAL", "* " * 15)
         print("1. Resumo do Programa de um Partido")
         print("2. Ver Propostas por Tema")
         print("3. Perfil Básico de um Partido")
@@ -292,15 +329,15 @@ def main():
                     resultado = resumir_programa_partido(sigla_oficial, dados)
                     nome_completo = PARTIDOS_INFO[sigla_oficial]["nome_completo"]
                     print()
-                    print("*" * 30, f" Resumo do Programa: {nome_completo}", "*" * 30)
+                    print("*" * 10, f" Resumo do Programa: {nome_completo}", "*" * 10)
                     print(resultado)
-                    print("- " * 30)
+                    print("- " * 10)
                 elif escolha == '3':
                     resultado = criar_perfil_partido(sigla_oficial, dados)
                     nome_completo = PARTIDOS_INFO[sigla_oficial]["nome_completo"]
-                    print(f"\n* " * 30, f" Perfil Básico: {nome_completo}", "* " * 30)
+                    print(f"\n* " * 10, f" Perfil Básico: {nome_completo}", "* " * 10)
                     print(resultado)
-                    print("- " * 30)
+                    print("- " * 10)
             else:
                 print()
                 print("erro: partido não reconhecido, tente novamente.")
@@ -312,9 +349,9 @@ def main():
             texto_bruto = apresentar_info_por_tema(tema_escolhido, dados)
             resultado_formatado = formatar_tema_com_llm(tema_escolhido, texto_bruto)
             print()
-            print("*" * 30, f"Propostas sobre {tema_escolhido.capitalize()}", "*" * 30)
+            print("*" * 10, f"Propostas sobre {tema_escolhido.capitalize()}", "*" * 30)
             print(resultado_formatado)
-            print("-" * 30)
+            print("-" * 10)
 
         elif escolha == '0':
             print("Obrigado por usar o assistente. Até à próxima!")
