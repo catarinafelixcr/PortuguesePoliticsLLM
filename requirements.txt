@@ -1,0 +1,1 @@
+PyMuPDF PyPDF2 transformers torch tiktoken protobuf sentencepiece sentence-transformers faiss-cpu
